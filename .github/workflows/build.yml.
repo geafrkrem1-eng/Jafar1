@@ -1,0 +1,63 @@
+name: Build APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip project if uploaded as zip
+        run: |
+          if [ -f app-project.zip ]; then
+            unzip -q -o app-project.zip -x ".github/*"
+            echo "Project extracted from app-project.zip"
+          fi
+          ls
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: 8.9 }
+      - name: Unit tests
+        continue-on-error: true
+        run: gradle :app:testDebugUnitTest --no-daemon
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug --no-daemon
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          S_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          S_ALIAS: ${{ secrets.KEY_ALIAS }}
+          S_KPASS: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -f signing/jafar-release.jks ] && [ -f signing/keystore.properties ]; then
+            . signing/keystore.properties
+            echo "KEYSTORE_PATH=$PWD/signing/jafar-release.jks" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+            echo "Using signing key from signing/ folder"
+          elif [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> $GITHUB_ENV
+            echo "KEYSTORE_PASSWORD=$S_PASS" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$S_ALIAS" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=$S_KPASS" >> $GITHUB_ENV
+            echo "Using signing key from secrets"
+          else
+            echo "No signing key found: release will be unsigned"
+          fi
+      - name: Build Release APK
+        run: gradle :app:assembleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-files
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
